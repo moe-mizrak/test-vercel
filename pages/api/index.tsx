@@ -1,75 +1,64 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Redis } from '@upstash/redis';
 
-// — initialize Upstash Redis
 const redis = new Redis({
   url: process.env.KV_REST_API_URL!,
   token: process.env.KV_REST_API_TOKEN!,
 });
 
+const DEFAULT_REPO = 'https://github.com/moe-mizrak/laravel-openrouter';
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const repoUrl = req.query.repo_url as string | undefined;
-
-  if (!repoUrl) {
-    res.status(400).send('Missing repo_url');
-    return;
-  }
-
+  const repoUrl = (req.query.repo_url as string) || DEFAULT_REPO;
   const acceptHeader = req.headers['accept'] || '';
 
-  // ——————————————————————————
-  // 1) Redirect path: browser navigations
-  // ——————————————————————————
   if (acceptHeader.includes('text/html')) {
-    const redirectKey = `selected_for:${repoUrl}`;
-    const targetRepo = await redis.get<string>(redirectKey) || repoUrl;
-
-    res.writeHead(302, { Location: targetRepo });
+    const selected = (await redis.get<string>(`selected_for:${repoUrl}`)) || DEFAULT_REPO;
+    res.writeHead(302, { Location: selected });
     res.end();
     return;
   }
 
-  // ——————————————————————————
-  // 2) Image path: serve SVG + KV write
-  // ——————————————————————————
+  let selected = await redis.get<string>(`selected_for:${repoUrl}`);
 
-  // Save original repo URL if not already saved
+  if (!selected) {
+    const allRepos = await redis.keys('*');
+    const validRepos = allRepos.filter((key) => key !== `selected_for:${repoUrl}` && key.startsWith('https://'));
+    selected = validRepos.length > 0
+      ? validRepos[Math.floor(Math.random() * validRepos.length)]
+      : DEFAULT_REPO;
+
+    await redis.set(`selected_for:${repoUrl}`, selected, { ex: 60 * 5 });
+  }
+
+  // Try to extract name from selected repo
+  let repoName = 'laravel-openrouter';
+  try {
+    const parts = new URL(selected).pathname.split('/');
+    repoName = parts.pop() || repoName;
+  } catch {}
+
+  const svg = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="500" height="120">
+    <rect width="100%" height="100%" fill="white"/>
+    <text x="50%" y="30%" fill="#2962FF" dominant-baseline="middle" text-anchor="middle" font-size="32" font-family="monospace" font-weight="bold">
+      ${repoName}
+    </text>
+    <text x="50%" y="65%" fill="#0288D1" dominant-baseline="middle" text-anchor="middle" font-size="12" font-family="monospace" letter-spacing="3" font-style="italic">
+      RepoFusion | Unite,Share,Accelerate
+    </text>
+    <line x1="10" y1="110" x2="490" y2="110" stroke="#0288D1" stroke-width="4" stroke-dasharray="10,5"/>
+    <circle cx="10" cy="110" r="6" fill="#0288D1"/>
+    <circle cx="490" cy="110" r="6" fill="#0288D1"/>
+  </svg>
+`.trim();
+
+
+  // Only store user’s own repo once
   const exists = await redis.get(repoUrl);
   if (!exists) {
     await redis.set(repoUrl, repoUrl);
   }
-
-  // Check if a random target is already selected for this repo_url
-  const redirectKey = `selected_for:${repoUrl}`;
-  let selectedRepo = await redis.get<string>(redirectKey);
-
-  if (!selectedRepo) {
-    const allKeys = await redis.keys('*');
-    const repoUrls = allKeys.filter((k) => k.startsWith('https://github.com/'));
-
-    if (repoUrls.length > 0) {
-      selectedRepo = repoUrls[Math.floor(Math.random() * repoUrls.length)];
-      await redis.set(redirectKey, selectedRepo, { ex: 300 }); // TTL: 5 mins
-    } else {
-      selectedRepo = repoUrl; // fallback
-    }
-  }
-
-  // Generate SVG from selectedRepo
-  let repoName = 'Invalid repo URL';
-  try {
-    const parts = new URL(selectedRepo).pathname.split('/');
-    repoName = parts.pop() || '';
-  } catch {}
-
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="500" height="60">
-      <rect width="100%" height="100%" fill="#0f172a"/>
-      <text x="50%" y="50%" fill="#facc15" dominant-baseline="middle" text-anchor="middle" font-size="16" font-family="monospace">
-        ${repoName}
-      </text>
-    </svg>
-  `.trim();
 
   res.statusCode = 200;
   res.setHeader('Content-Type', 'image/svg+xml');
