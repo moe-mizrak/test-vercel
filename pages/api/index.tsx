@@ -1,3 +1,5 @@
+import type { NextApiRequest, NextApiResponse } from 'next';
+
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const repoUrl = req.query.repo_url as string | undefined;
   
@@ -29,12 +31,12 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         </text>
       </svg>
     `.trim();
-  
+
     res.statusCode = 200;
     res.setHeader('Content-Type', 'image/svg+xml');
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=3600, stale-while-revalidate');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src *; font-src *;");
     res.end(svg);
-  }
-  
+}
+
