@@ -5,7 +5,7 @@ import { Redis } from '@upstash/redis';
 
 // — initialize Upstash Redis with your KV_URL and KV_REST_API_TOKEN
 const redis = new Redis({
-  url: process.env.KV_URL!,
+  url: process.env.KV_REST_API_URL!,
   token: process.env.KV_REST_API_TOKEN!,
 });
 
