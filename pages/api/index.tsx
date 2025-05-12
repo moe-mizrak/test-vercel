@@ -1,8 +1,7 @@
-// pages/api/index.ts
-
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Redis } from '@upstash/redis';
 
+// — initialize Upstash Redis
 const redis = new Redis({
   url: process.env.KV_REST_API_URL!,
   token: process.env.KV_REST_API_TOKEN!,
@@ -18,42 +17,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const acceptHeader = req.headers['accept'] || '';
 
-  // 1. Register the user repo in DB if not already
+  // ——————————————————————————
+  // 1) Redirect path: browser navigations
+  // ——————————————————————————
+  if (acceptHeader.includes('text/html')) {
+    const redirectKey = `selected_for:${repoUrl}`;
+    const targetRepo = await redis.get<string>(redirectKey) || repoUrl;
+
+    res.writeHead(302, { Location: targetRepo });
+    res.end();
+    return;
+  }
+
+  // ——————————————————————————
+  // 2) Image path: serve SVG + KV write
+  // ——————————————————————————
+
+  // Save original repo URL if not already saved
   const exists = await redis.get(repoUrl);
   if (!exists) {
     await redis.set(repoUrl, repoUrl);
   }
 
-  // 2. Handle browser navigation
-  if (acceptHeader.includes('text/html')) {
-    res.writeHead(302, { Location: repoUrl });
-    res.end();
-    return;
+  // Check if a random target is already selected for this repo_url
+  const redirectKey = `selected_for:${repoUrl}`;
+  let selectedRepo = await redis.get<string>(redirectKey);
+
+  if (!selectedRepo) {
+    const allKeys = await redis.keys('*');
+    const repoUrls = allKeys.filter((k) => k.startsWith('https://github.com/'));
+
+    if (repoUrls.length > 0) {
+      selectedRepo = repoUrls[Math.floor(Math.random() * repoUrls.length)];
+      await redis.set(redirectKey, selectedRepo, { ex: 300 }); // TTL: 5 mins
+    } else {
+      selectedRepo = repoUrl; // fallback
+    }
   }
 
-  // 3. Pick a random repo from Redis
-  const allRepos = await redis.keys('*'); // keys are the repo URLs
-  const randomRepo = allRepos[Math.floor(Math.random() * allRepos.length)] || repoUrl;
-
-  // 4. Extract repo name from random repo
+  // Generate SVG from selectedRepo
   let repoName = 'Invalid repo URL';
   try {
-    const parts = new URL(randomRepo).pathname.split('/');
+    const parts = new URL(selectedRepo).pathname.split('/');
     repoName = parts.pop() || '';
   } catch {}
 
-  // 5. Generate redirect URL using the random repo
-  const redirectUrl = `${req.headers.host?.startsWith('http') ? '' : 'https://'}${req.headers.host}/api/redirect?repo_url=${encodeURIComponent(randomRepo)}`;
-
-  // 6. Generate SVG using redirect URL and random repo name
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="500" height="60">
-      <a href="${redirectUrl}" target="_blank">
-        <rect width="100%" height="100%" fill="#0f172a"/>
-        <text x="50%" y="50%" fill="#facc15" dominant-baseline="middle" text-anchor="middle" font-size="16" font-family="monospace">
-          ${repoName}
-        </text>
-      </a>
+      <rect width="100%" height="100%" fill="#0f172a"/>
+      <text x="50%" y="50%" fill="#facc15" dominant-baseline="middle" text-anchor="middle" font-size="16" font-family="monospace">
+        ${repoName}
+      </text>
     </svg>
   `.trim();
 
